@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use vmm_sys_util::eventfd::EventFd;
+use sys_util::EventFd;
 
 use super::connection::Endpoint;
 use super::message::*;
@@ -645,15 +645,12 @@ impl MasterInternal {
 mod tests {
     use super::super::connection::Listener;
     use super::*;
-    use vmm_sys_util::rand::rand_alphanumerics;
+    use tempfile::{Builder, TempDir};
 
     use std::path::PathBuf;
 
-    fn temp_path() -> PathBuf {
-        PathBuf::from(format!(
-            "/tmp/vhost_test_{}",
-            rand_alphanumerics(8).to_str().unwrap()
-        ))
+    fn temp_dir() -> TempDir {
+        Builder::new().prefix("/tmp/vhost_test").tempdir().unwrap()
     }
 
     fn create_pair<P: AsRef<Path>>(path: P) -> (Master, Endpoint<MasterReq>) {
@@ -666,7 +663,9 @@ mod tests {
 
     #[test]
     fn create_master() {
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let listener = Listener::new(&path, true).unwrap();
         listener.set_nonblocking(true).unwrap();
 
@@ -693,7 +692,9 @@ mod tests {
 
     #[test]
     fn test_create_failure() {
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let _ = Listener::new(&path, true).unwrap();
         let _ = Listener::new(&path, false).is_err();
         assert!(Master::connect(&path, 1).is_err());
@@ -708,7 +709,9 @@ mod tests {
 
     #[test]
     fn test_features() {
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let (master, mut peer) = create_pair(&path);
 
         master.set_owner().unwrap();
@@ -743,7 +746,9 @@ mod tests {
 
     #[test]
     fn test_protocol_features() {
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let (mut master, mut peer) = create_pair(&path);
 
         master.set_owner().unwrap();
@@ -794,7 +799,9 @@ mod tests {
 
     #[test]
     fn test_master_set_config_negative() {
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let (mut master, _peer) = create_pair(&path);
         let buf = vec![0x0; MAX_MSG_SIZE + 1];
 
@@ -835,7 +842,9 @@ mod tests {
     }
 
     fn create_pair2() -> (Master, Endpoint<MasterReq>) {
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let (master, peer) = create_pair(&path);
 
         {

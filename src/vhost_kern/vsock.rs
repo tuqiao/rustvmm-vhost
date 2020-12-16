@@ -11,8 +11,8 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+use sys_util::ioctl_with_ref;
 use vm_memory::GuestAddressSpace;
-use vmm_sys_util::ioctl::ioctl_with_ref;
 
 use super::vhost_binding::{VHOST_VSOCK_SET_GUEST_CID, VHOST_VSOCK_SET_RUNNING};
 use super::{ioctl_result, Error, Result, VhostKernBackend};
@@ -78,8 +78,8 @@ impl<AS: GuestAddressSpace> AsRawFd for Vsock<AS> {
 
 #[cfg(test)]
 mod tests {
+    use sys_util::EventFd;
     use vm_memory::{GuestAddress, GuestMemory, GuestMemoryMmap};
-    use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
     use crate::{VhostBackend, VhostUserMemoryRegionInfo, VringConfigData};
@@ -153,7 +153,7 @@ mod tests {
         vsock.set_log_base(0x4000, Some(1)).unwrap_err();
         vsock.set_log_base(0x4000, None).unwrap();
 
-        let eventfd = EventFd::new(0).unwrap();
+        let eventfd = EventFd::new().unwrap();
         vsock.set_log_fd(eventfd.as_raw_fd()).unwrap();
 
         vsock.set_vring_num(0, 32).unwrap();

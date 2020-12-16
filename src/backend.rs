@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::os::unix::io::RawFd;
 use std::sync::RwLock;
 
-use vmm_sys_util::eventfd::EventFd;
+use sys_util::EventFd;
 
 use super::Result;
 
@@ -470,7 +470,7 @@ mod tests {
         b.set_vring_base(1, 2).unwrap();
         assert_eq!(b.get_vring_base(1).unwrap(), 2);
 
-        let eventfd = EventFd::new(0).unwrap();
+        let eventfd = EventFd::new().unwrap();
         b.set_vring_call(1, &eventfd).unwrap();
         b.set_vring_kick(1, &eventfd).unwrap();
         b.set_vring_err(1, &eventfd).unwrap();

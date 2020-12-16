@@ -130,10 +130,10 @@ impl Error {
     }
 }
 
-impl std::convert::From<vmm_sys_util::errno::Error> for Error {
+impl std::convert::From<sys_util::Error> for Error {
     /// Convert raw socket errors into meaningful vhost-user errors.
     ///
-    /// The vmm_sys_util::errno::Error is a simple wrapper over the raw errno, which doesn't means
+    /// The sys_util::Error is a simple wrapper over the raw errno, which doesn't means
     /// much to the vhost-user connection manager. So convert it into meaningful errors to simplify
     /// the connection manager logic.
     ///
@@ -142,7 +142,7 @@ impl std::convert::From<vmm_sys_util::errno::Error> for Error {
     /// * - Error::SocketBroken: the underline socket is broken.
     /// * - Error::SocketError: other socket related errors.
     #[allow(unreachable_patterns)] // EWOULDBLOCK equals to EGAIN on linux
-    fn from(err: vmm_sys_util::errno::Error) -> Self {
+    fn from(err: sys_util::Error) -> Self {
         match err.errno() {
             // The socket is marked nonblocking and the requested operation would block.
             libc::EAGAIN => Error::SocketRetry(IOError::from_raw_os_error(libc::EAGAIN)),
@@ -184,19 +184,16 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
-    use vmm_sys_util::rand::rand_alphanumerics;
 
     use super::dummy_slave::{DummySlaveReqHandler, VIRTIO_FEATURES};
     use super::message::*;
     use super::*;
     use crate::backend::VhostBackend;
     use crate::{VhostUserMemoryRegionInfo, VringConfigData};
+    use tempfile::Builder;
 
     fn temp_path() -> PathBuf {
-        PathBuf::from(format!(
-            "/tmp/vhost_test_{}",
-            rand_alphanumerics(8).to_str().unwrap()
-        ))
+        Builder::new().prefix("/tmp/vhost_test").path().unwrap()
     }
 
     fn create_slave<P, S>(path: P, backend: Arc<S>) -> (Master, SlaveReqHandler<S>)
@@ -351,7 +348,7 @@ mod tests {
         let num = master.get_queue_num().unwrap();
         assert_eq!(num, 2);
 
-        let eventfd = vmm_sys_util::eventfd::EventFd::new(0).unwrap();
+        let eventfd = sys_util::EventFd::new().unwrap();
         let mem = [VhostUserMemoryRegionInfo {
             guest_phys_addr: 0,
             memory_size: 0x10_0000,
@@ -419,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_error_from_sys_util_error() {
-        let e: Error = vmm_sys_util::errno::Error::new(libc::EAGAIN).into();
+        let e: Error = sys_util::Error::new(libc::EAGAIN).into();
         if let Error::SocketRetry(e1) = e {
             assert_eq!(e1.raw_os_error().unwrap(), libc::EAGAIN);
         } else {

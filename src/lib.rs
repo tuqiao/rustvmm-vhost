@@ -35,7 +35,7 @@
 #[cfg_attr(feature = "vhost-user", macro_use)]
 extern crate bitflags;
 #[cfg_attr(feature = "vhost-kern", macro_use)]
-extern crate vmm_sys_util;
+extern crate sys_util;
 
 mod backend;
 pub use backend::*;

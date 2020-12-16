@@ -1,5 +1,5 @@
 [package]
-name = "vhost"
+name = "vmm_vhost"
 version = "0.1.0"
 keywords = ["vhost", "vhost-user", "virtio", "vdpa"]
 description = "a pure rust library for vdpa, vhost and vhost-user"
@@ -22,7 +22,8 @@ vhost-user-slave = ["vhost-user"]
 bitflags = ">=1.0.1"
 libc = ">=0.2.39"
 
-vmm-sys-util = ">=0.3.1"
+sys_util = { path = "../../../platform/crosvm/sys_util" } # provided by ebuild
+tempfile = { path = "../../../platform/crosvm/tempfile" } # provided by ebuild
 vm-memory = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
