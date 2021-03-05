@@ -13,7 +13,7 @@
 
 use std::os::unix::io::{AsRawFd, RawFd};
 
-use vm_memory::GuestAddressSpace;
+use vm_memory::{Address, GuestAddress, GuestAddressSpace, GuestMemory, GuestUsize};
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::ioctl::{ioctl, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_ref};
 
@@ -39,7 +39,7 @@ fn ioctl_result<T>(rc: i32, res: T) -> Result<T> {
 
 /// Represent an in-kernel vhost device backend.
 pub trait VhostKernBackend: AsRawFd {
-    /// Assoicated type to access guest memory.
+    /// Associated type to access guest memory.
     type AS: GuestAddressSpace;
 
     /// Get the object to access the guest's memory.
@@ -55,52 +55,36 @@ pub trait VhostKernBackend: AsRawFd {
             return false;
         }
 
-        // TODO: the GuestMemory trait lacks of method to look up GPA by HVA,
-        // so there's no way to validate HVAs. Please extend vm-memory crate
-        // first.
-        /*
+        let m = self.mem().memory();
         let desc_table_size = 16 * u64::from(queue_size) as GuestUsize;
         let avail_ring_size = 6 + 2 * u64::from(queue_size) as GuestUsize;
         let used_ring_size = 6 + 8 * u64::from(queue_size) as GuestUsize;
         if GuestAddress(config_data.desc_table_addr)
             .checked_add(desc_table_size)
-            .map_or(true, |v| !self.mem().address_in_range(v))
+            .map_or(true, |v| !m.address_in_range(v))
         {
-            false
-        } else if GuestAddress(config_data.avail_ring_addr)
-            .checked_add(avail_ring_size)
-            .map_or(true, |v| !self.mem().address_in_range(v))
-        {
-            false
-        } else if GuestAddress(config_data.used_ring_addr)
-            .checked_add(used_ring_size)
-            .map_or(true, |v| !self.mem().address_in_range(v))
-        {
-            false
+            return false;
         }
-        */
+        if GuestAddress(config_data.avail_ring_addr)
+            .checked_add(avail_ring_size)
+            .map_or(true, |v| !m.address_in_range(v))
+        {
+            return false;
+        }
+        if GuestAddress(config_data.used_ring_addr)
+            .checked_add(used_ring_size)
+            .map_or(true, |v| !m.address_in_range(v))
+        {
+            return false;
+        }
 
         config_data.is_log_addr_valid()
     }
 }
 
 impl<T: VhostKernBackend> VhostBackend for T {
-    /// Set the current process as the owner of this file descriptor.
-    /// This must be run before any other vhost ioctls.
-    fn set_owner(&mut self) -> Result<()> {
-        // This ioctl is called on a valid vhost fd and has its return value checked.
-        let ret = unsafe { ioctl(self, VHOST_SET_OWNER()) };
-        ioctl_result(ret, ())
-    }
-
-    fn reset_owner(&mut self) -> Result<()> {
-        // This ioctl is called on a valid vhost fd and has its return value checked.
-        let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
-        ioctl_result(ret, ())
-    }
-
     /// Get a bitmask of supported virtio/vhost features.
-    fn get_features(&mut self) -> Result<u64> {
+    fn get_features(&self) -> Result<u64> {
         let mut avail_features: u64 = 0;
         // This ioctl is called on a valid vhost fd and has its return value checked.
         let ret = unsafe { ioctl_with_mut_ref(self, VHOST_GET_FEATURES(), &mut avail_features) };
@@ -112,14 +96,28 @@ impl<T: VhostKernBackend> VhostBackend for T {
     ///
     /// # Arguments
     /// * `features` - Bitmask of features to set.
-    fn set_features(&mut self, features: u64) -> Result<()> {
+    fn set_features(&self, features: u64) -> Result<()> {
         // This ioctl is called on a valid vhost fd and has its return value checked.
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_FEATURES(), &features) };
         ioctl_result(ret, ())
     }
 
+    /// Set the current process as the owner of this file descriptor.
+    /// This must be run before any other vhost ioctls.
+    fn set_owner(&self) -> Result<()> {
+        // This ioctl is called on a valid vhost fd and has its return value checked.
+        let ret = unsafe { ioctl(self, VHOST_SET_OWNER()) };
+        ioctl_result(ret, ())
+    }
+
+    fn reset_owner(&self) -> Result<()> {
+        // This ioctl is called on a valid vhost fd and has its return value checked.
+        let ret = unsafe { ioctl(self, VHOST_RESET_OWNER()) };
+        ioctl_result(ret, ())
+    }
+
     /// Set the guest memory mappings for vhost to use.
-    fn set_mem_table(&mut self, regions: &[VhostUserMemoryRegionInfo]) -> Result<()> {
+    fn set_mem_table(&self, regions: &[VhostUserMemoryRegionInfo]) -> Result<()> {
         if regions.is_empty() || regions.len() > VHOST_MAX_MEMORY_REGIONS {
             return Err(Error::InvalidGuestMemory);
         }
@@ -148,7 +146,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     ///
     /// # Arguments
     /// * `base` - Base address for page modification logging.
-    fn set_log_base(&mut self, base: u64, fd: Option<RawFd>) -> Result<()> {
+    fn set_log_base(&self, base: u64, fd: Option<RawFd>) -> Result<()> {
         if fd.is_some() {
             return Err(Error::LogAddress);
         }
@@ -159,7 +157,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     }
 
     /// Specify an eventfd file descriptor to signal on log write.
-    fn set_log_fd(&mut self, fd: RawFd) -> Result<()> {
+    fn set_log_fd(&self, fd: RawFd) -> Result<()> {
         // This ioctl is called on a valid vhost fd and has its return value checked.
         let val: i32 = fd;
         let ret = unsafe { ioctl_with_ref(self, VHOST_SET_LOG_FD(), &val) };
@@ -171,7 +169,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     /// # Arguments
     /// * `queue_index` - Index of the queue to set descriptor count for.
     /// * `num` - Number of descriptors in the queue.
-    fn set_vring_num(&mut self, queue_index: usize, num: u16) -> Result<()> {
+    fn set_vring_num(&self, queue_index: usize, num: u16) -> Result<()> {
         let vring_state = vhost_vring_state {
             index: queue_index as u32,
             num: u32::from(num),
@@ -187,7 +185,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     /// # Arguments
     /// * `queue_index` - Index of the queue to set addresses for.
     /// * `config_data` - Vring config data.
-    fn set_vring_addr(&mut self, queue_index: usize, config_data: &VringConfigData) -> Result<()> {
+    fn set_vring_addr(&self, queue_index: usize, config_data: &VringConfigData) -> Result<()> {
         if !self.is_valid(config_data) {
             return Err(Error::InvalidQueue);
         }
@@ -212,7 +210,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
     /// * `num` - Index where available descriptors start.
-    fn set_vring_base(&mut self, queue_index: usize, base: u16) -> Result<()> {
+    fn set_vring_base(&self, queue_index: usize, base: u16) -> Result<()> {
         let vring_state = vhost_vring_state {
             index: queue_index as u32,
             num: u32::from(base),
@@ -224,7 +222,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     }
 
     /// Get a bitmask of supported virtio/vhost features.
-    fn get_vring_base(&mut self, queue_index: usize) -> Result<u32> {
+    fn get_vring_base(&self, queue_index: usize) -> Result<u32> {
         let vring_state = vhost_vring_state {
             index: queue_index as u32,
             num: 0,
@@ -239,7 +237,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
     /// * `fd` - EventFd to trigger.
-    fn set_vring_call(&mut self, queue_index: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_call(&self, queue_index: usize, fd: &EventFd) -> Result<()> {
         let vring_file = vhost_vring_file {
             index: queue_index as u32,
             fd: fd.as_raw_fd(),
@@ -256,7 +254,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
     /// * `fd` - EventFd that will be signaled from guest.
-    fn set_vring_kick(&mut self, queue_index: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_kick(&self, queue_index: usize, fd: &EventFd) -> Result<()> {
         let vring_file = vhost_vring_file {
             index: queue_index as u32,
             fd: fd.as_raw_fd(),
@@ -272,7 +270,7 @@ impl<T: VhostKernBackend> VhostBackend for T {
     /// # Arguments
     /// * `queue_index` - Index of the queue to modify.
     /// * `fd` - EventFd that will be signaled from the backend.
-    fn set_vring_err(&mut self, queue_index: usize, fd: &EventFd) -> Result<()> {
+    fn set_vring_err(&self, queue_index: usize, fd: &EventFd) -> Result<()> {
         let vring_file = vhost_vring_file {
             index: queue_index as u32,
             fd: fd.as_raw_fd(),

@@ -6,7 +6,7 @@
 use std::mem;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use vmm_sys_util::eventfd::EventFd;
 
@@ -78,6 +78,10 @@ impl Master {
         }
     }
 
+    fn node(&self) -> MutexGuard<MasterInternal> {
+        self.node.lock().unwrap()
+    }
+
     /// Create a new instance from a Unix stream socket.
     pub fn from_stream(sock: UnixStream, max_queue_num: u64) -> Self {
         Self::new(Endpoint::<MasterReq>::from_stream(sock), max_queue_num)
@@ -115,8 +119,8 @@ impl Master {
 
 impl VhostBackend for Master {
     /// Get from the underlying vhost implementation the feature bitmask.
-    fn get_features(&mut self) -> Result<u64> {
-        let mut node = self.node.lock().unwrap();
+    fn get_features(&self) -> Result<u64> {
+        let mut node = self.node();
         let hdr = node.send_request_header(MasterReq::GET_FEATURES, None)?;
         let val = node.recv_reply::<VhostUserU64>(&hdr)?;
         node.virtio_features = val.value;
@@ -124,8 +128,8 @@ impl VhostBackend for Master {
     }
 
     /// Enable features in the underlying vhost implementation using a bitmask.
-    fn set_features(&mut self, features: u64) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_features(&self, features: u64) -> Result<()> {
+        let mut node = self.node();
         let val = VhostUserU64::new(features);
         let _ = node.send_request_with_body(MasterReq::SET_FEATURES, &val, None)?;
         // Don't wait for ACK here because the protocol feature negotiation process hasn't been
@@ -135,18 +139,18 @@ impl VhostBackend for Master {
     }
 
     /// Set the current Master as an owner of the session.
-    fn set_owner(&mut self) -> Result<()> {
+    fn set_owner(&self) -> Result<()> {
         // We unwrap() the return value to assert that we are not expecting threads to ever fail
         // while holding the lock.
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         let _ = node.send_request_header(MasterReq::SET_OWNER, None)?;
         // Don't wait for ACK here because the protocol feature negotiation process hasn't been
         // completed yet.
         Ok(())
     }
 
-    fn reset_owner(&mut self) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn reset_owner(&self) -> Result<()> {
+        let mut node = self.node();
         let _ = node.send_request_header(MasterReq::RESET_OWNER, None)?;
         // Don't wait for ACK here because the protocol feature negotiation process hasn't been
         // completed yet.
@@ -155,7 +159,7 @@ impl VhostBackend for Master {
 
     /// Set the memory map regions on the slave so it can translate the vring
     /// addresses. In the ancillary data there is an array of file descriptors
-    fn set_mem_table(&mut self, regions: &[VhostUserMemoryRegionInfo]) -> Result<()> {
+    fn set_mem_table(&self, regions: &[VhostUserMemoryRegionInfo]) -> Result<()> {
         if regions.is_empty() || regions.len() > MAX_ATTACHED_FD_ENTRIES {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -174,12 +178,13 @@ impl VhostBackend for Master {
             ctx.append(&reg, region.mmap_handle);
         }
 
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         let body = VhostUserMemory::new(ctx.regions.len() as u32);
+        let (_, payload, _) = unsafe { ctx.regions.align_to::<u8>() };
         let hdr = node.send_request_with_payload(
             MasterReq::SET_MEM_TABLE,
             &body,
-            ctx.regions.as_slice(),
+            payload,
             Some(ctx.fds.as_slice()),
         )?;
         node.wait_for_ack(&hdr).map_err(|e| e.into())
@@ -187,8 +192,8 @@ impl VhostBackend for Master {
 
     // Clippy doesn't seem to know that if let with && is still experimental
     #[allow(clippy::unnecessary_unwrap)]
-    fn set_log_base(&mut self, base: u64, fd: Option<RawFd>) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_log_base(&self, base: u64, fd: Option<RawFd>) -> Result<()> {
+        let mut node = self.node();
         let val = VhostUserU64::new(base);
 
         if node.acked_protocol_features & VhostUserProtocolFeatures::LOG_SHMFD.bits() != 0
@@ -202,16 +207,16 @@ impl VhostBackend for Master {
         Ok(())
     }
 
-    fn set_log_fd(&mut self, fd: RawFd) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_log_fd(&self, fd: RawFd) -> Result<()> {
+        let mut node = self.node();
         let fds = [fd];
         node.send_request_header(MasterReq::SET_LOG_FD, Some(&fds))?;
         Ok(())
     }
 
     /// Set the size of the queue.
-    fn set_vring_num(&mut self, queue_index: usize, num: u16) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_vring_num(&self, queue_index: usize, num: u16) -> Result<()> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -222,8 +227,8 @@ impl VhostBackend for Master {
     }
 
     /// Sets the addresses of the different aspects of the vring.
-    fn set_vring_addr(&mut self, queue_index: usize, config_data: &VringConfigData) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_vring_addr(&self, queue_index: usize, config_data: &VringConfigData) -> Result<()> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num
             || config_data.flags & !(VhostUserVringAddrFlags::all().bits()) != 0
         {
@@ -236,8 +241,8 @@ impl VhostBackend for Master {
     }
 
     /// Sets the base offset in the available vring.
-    fn set_vring_base(&mut self, queue_index: usize, base: u16) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_vring_base(&self, queue_index: usize, base: u16) -> Result<()> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -247,8 +252,8 @@ impl VhostBackend for Master {
         node.wait_for_ack(&hdr).map_err(|e| e.into())
     }
 
-    fn get_vring_base(&mut self, queue_index: usize) -> Result<u32> {
-        let mut node = self.node.lock().unwrap();
+    fn get_vring_base(&self, queue_index: usize) -> Result<u32> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -263,8 +268,8 @@ impl VhostBackend for Master {
     /// Bits (0-7) of the payload contain the vring index. Bit 8 is the invalid FD flag. This flag
     /// is set when there is no file descriptor in the ancillary data. This signals that polling
     /// will be used instead of waiting for the call.
-    fn set_vring_call(&mut self, queue_index: usize, fd: &EventFd) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_vring_call(&self, queue_index: usize, fd: &EventFd) -> Result<()> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -276,8 +281,8 @@ impl VhostBackend for Master {
     /// Bits (0-7) of the payload contain the vring index. Bit 8 is the invalid FD flag. This flag
     /// is set when there is no file descriptor in the ancillary data. This signals that polling
     /// should be used instead of waiting for a kick.
-    fn set_vring_kick(&mut self, queue_index: usize, fd: &EventFd) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_vring_kick(&self, queue_index: usize, fd: &EventFd) -> Result<()> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -288,8 +293,8 @@ impl VhostBackend for Master {
     /// Set the event file descriptor to signal when error occurs.
     /// Bits (0-7) of the payload contain the vring index. Bit 8 is the invalid FD flag. This flag
     /// is set when there is no file descriptor in the ancillary data.
-    fn set_vring_err(&mut self, queue_index: usize, fd: &EventFd) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+    fn set_vring_err(&self, queue_index: usize, fd: &EventFd) -> Result<()> {
+        let mut node = self.node();
         if queue_index as u64 >= node.max_queue_num {
             return error_code(VhostUserError::InvalidParam);
         }
@@ -300,7 +305,7 @@ impl VhostBackend for Master {
 
 impl VhostUserMaster for Master {
     fn get_protocol_features(&mut self) -> Result<VhostUserProtocolFeatures> {
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         let flag = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         if node.virtio_features & flag == 0 || node.acked_virtio_features & flag == 0 {
             return error_code(VhostUserError::InvalidOperation);
@@ -317,7 +322,7 @@ impl VhostUserMaster for Master {
     }
 
     fn set_protocol_features(&mut self, features: VhostUserProtocolFeatures) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         let flag = VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits();
         if node.virtio_features & flag == 0 || node.acked_virtio_features & flag == 0 {
             return error_code(VhostUserError::InvalidOperation);
@@ -332,7 +337,7 @@ impl VhostUserMaster for Master {
     }
 
     fn get_queue_num(&mut self) -> Result<u64> {
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         if !node.is_feature_mq_available() {
             return error_code(VhostUserError::InvalidOperation);
         }
@@ -347,7 +352,7 @@ impl VhostUserMaster for Master {
     }
 
     fn set_vring_enable(&mut self, queue_index: usize, enable: bool) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         // set_vring_enable() is supported only when PROTOCOL_FEATURES has been enabled.
         if node.acked_virtio_features & VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits() == 0 {
             return error_code(VhostUserError::InvalidOperation);
@@ -373,7 +378,7 @@ impl VhostUserMaster for Master {
             return error_code(VhostUserError::InvalidParam);
         }
 
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         // depends on VhostUserProtocolFeatures::CONFIG
         if node.acked_protocol_features & VhostUserProtocolFeatures::CONFIG.bits() == 0 {
             return error_code(VhostUserError::InvalidOperation);
@@ -390,9 +395,13 @@ impl VhostUserMaster for Master {
             return error_code(VhostUserError::InvalidMessage);
         } else if body_reply.size == 0 {
             return error_code(VhostUserError::SlaveInternalError);
-        } else if body_reply.size != body.size || body_reply.size as usize != buf.len() {
+        } else if body_reply.size != body.size
+            || body_reply.size as usize != buf.len()
+            || body_reply.offset != body.offset
+        {
             return error_code(VhostUserError::InvalidMessage);
         }
+
         Ok((body_reply, buf_reply))
     }
 
@@ -405,7 +414,7 @@ impl VhostUserMaster for Master {
             return error_code(VhostUserError::InvalidParam);
         }
 
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         // depends on VhostUserProtocolFeatures::CONFIG
         if node.acked_protocol_features & VhostUserProtocolFeatures::CONFIG.bits() == 0 {
             return error_code(VhostUserError::InvalidOperation);
@@ -416,7 +425,7 @@ impl VhostUserMaster for Master {
     }
 
     fn set_slave_request_fd(&mut self, fd: RawFd) -> Result<()> {
-        let mut node = self.node.lock().unwrap();
+        let mut node = self.node();
         if node.acked_protocol_features & VhostUserProtocolFeatures::SLAVE_REQ.bits() == 0 {
             return error_code(VhostUserError::InvalidOperation);
         }
@@ -429,7 +438,7 @@ impl VhostUserMaster for Master {
 
 impl AsRawFd for Master {
     fn as_raw_fd(&self) -> RawFd {
-        let node = self.node.lock().unwrap();
+        let node = self.node();
         node.main_sock.as_raw_fd()
     }
 }
@@ -503,14 +512,14 @@ impl MasterInternal {
         Ok(hdr)
     }
 
-    fn send_request_with_payload<T: Sized, P: Sized>(
+    fn send_request_with_payload<T: Sized>(
         &mut self,
         code: MasterReq,
         msg: &T,
-        payload: &[P],
+        payload: &[u8],
         fds: Option<&[RawFd]>,
     ) -> VhostUserResult<VhostUserMsgHeader<MasterReq>> {
-        let len = mem::size_of::<T>() + payload.len() * mem::size_of::<P>();
+        let len = mem::size_of::<T>() + payload.len();
         if len > MAX_MSG_SIZE {
             return Err(VhostUserError::InvalidParam);
         }
@@ -568,7 +577,11 @@ impl MasterInternal {
         &mut self,
         hdr: &VhostUserMsgHeader<MasterReq>,
     ) -> VhostUserResult<(T, Vec<u8>, Option<Vec<RawFd>>)> {
-        if mem::size_of::<T>() > MAX_MSG_SIZE || hdr.is_reply() {
+        if mem::size_of::<T>() > MAX_MSG_SIZE
+            || hdr.get_size() as usize <= mem::size_of::<T>()
+            || hdr.get_size() as usize > MAX_MSG_SIZE
+            || hdr.is_reply()
+        {
             return Err(VhostUserError::InvalidParam);
         }
         self.check_state()?;
@@ -582,11 +595,8 @@ impl MasterInternal {
         {
             Endpoint::<MasterReq>::close_rfds(rfds);
             return Err(VhostUserError::InvalidMessage);
-        } else if bytes > MAX_MSG_SIZE - mem::size_of::<T>() {
+        } else if bytes != buf.len() {
             return Err(VhostUserError::InvalidMessage);
-        } else if bytes < buf.len() {
-            // It's safe because we have checked the buffer size
-            unsafe { buf.set_len(bytes) };
         }
         Ok((body, buf, rfds))
     }
@@ -634,11 +644,14 @@ impl MasterInternal {
 mod tests {
     use super::super::connection::Listener;
     use super::*;
+    use vmm_sys_util::rand::rand_alphanumerics;
 
-    const UNIX_SOCKET_MASTER: &'static str = "/tmp/vhost_user_test_rust_master";
-    const UNIX_SOCKET_MASTER2: &'static str = "/tmp/vhost_user_test_rust_master2";
-    const UNIX_SOCKET_MASTER3: &'static str = "/tmp/vhost_user_test_rust_master3";
-    const UNIX_SOCKET_MASTER4: &'static str = "/tmp/vhost_user_test_rust_master4";
+    fn temp_path() -> String {
+        format!(
+            "/tmp/vhost_test_{}",
+            rand_alphanumerics(8).to_str().unwrap()
+        )
+    }
 
     fn create_pair(path: &str) -> (Master, Endpoint<MasterReq>) {
         let listener = Listener::new(path, true).unwrap();
@@ -649,14 +662,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn create_master() {
-        let listener = Listener::new(UNIX_SOCKET_MASTER, true).unwrap();
+        let path = temp_path();
+        let listener = Listener::new(&path, true).unwrap();
         listener.set_nonblocking(true).unwrap();
 
-        let mut master = Master::connect(UNIX_SOCKET_MASTER, 1).unwrap();
+        let master = Master::connect(&path, 1).unwrap();
         let mut slave = Endpoint::<MasterReq>::from_stream(listener.accept().unwrap().unwrap());
 
+        assert!(master.as_raw_fd() > 0);
         // Send two messages continuously
         master.set_owner().unwrap();
         master.reset_owner().unwrap();
@@ -675,24 +689,24 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_create_failure() {
-        let _ = Listener::new(UNIX_SOCKET_MASTER2, true).unwrap();
-        let _ = Listener::new(UNIX_SOCKET_MASTER2, false).is_err();
-        assert!(Master::connect(UNIX_SOCKET_MASTER2, 1).is_err());
+        let path = temp_path();
+        let _ = Listener::new(&path, true).unwrap();
+        let _ = Listener::new(&path, false).is_err();
+        assert!(Master::connect(&path, 1).is_err());
 
-        let listener = Listener::new(UNIX_SOCKET_MASTER2, true).unwrap();
-        assert!(Listener::new(UNIX_SOCKET_MASTER2, false).is_err());
+        let listener = Listener::new(&path, true).unwrap();
+        assert!(Listener::new(&path, false).is_err());
         listener.set_nonblocking(true).unwrap();
 
-        let _master = Master::connect(UNIX_SOCKET_MASTER2, 1).unwrap();
+        let _master = Master::connect(&path, 1).unwrap();
         let _slave = listener.accept().unwrap().unwrap();
     }
 
     #[test]
-    #[ignore]
     fn test_features() {
-        let (mut master, mut peer) = create_pair(UNIX_SOCKET_MASTER3);
+        let path = temp_path();
+        let (master, mut peer) = create_pair(&path);
 
         master.set_owner().unwrap();
         let (hdr, rfds) = peer.recv_header().unwrap();
@@ -709,6 +723,9 @@ mod tests {
         let (_hdr, rfds) = peer.recv_header().unwrap();
         assert!(rfds.is_none());
 
+        let hdr = VhostUserMsgHeader::new(MasterReq::SET_FEATURES, 0x4, 8);
+        let msg = VhostUserU64::new(0x15);
+        peer.send_message(&hdr, &msg, None).unwrap();
         master.set_features(0x15).unwrap();
         let (_hdr, msg, rfds) = peer.recv_body::<VhostUserU64>().unwrap();
         assert!(rfds.is_none());
@@ -722,9 +739,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_protocol_features() {
-        let (mut master, mut peer) = create_pair(UNIX_SOCKET_MASTER4);
+        let path = temp_path();
+        let (mut master, mut peer) = create_pair(&path);
 
         master.set_owner().unwrap();
         let (hdr, rfds) = peer.recv_header().unwrap();
@@ -773,12 +790,209 @@ mod tests {
     }
 
     #[test]
-    fn test_set_mem_table() {
-        // TODO
+    fn test_master_set_config_negative() {
+        let path = temp_path();
+        let (mut master, _peer) = create_pair(&path);
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        master
+            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .unwrap_err();
+
+        {
+            let mut node = master.node();
+            node.virtio_features = 0xffff_ffff;
+            node.acked_virtio_features = 0xffff_ffff;
+            node.protocol_features = 0xffff_ffff;
+            node.acked_protocol_features = 0xffff_ffff;
+        }
+
+        master
+            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .unwrap();
+        master
+            .set_config(0x0, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .unwrap_err();
+        master
+            .set_config(0x1000, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .unwrap_err();
+        master
+            .set_config(
+                0x100,
+                unsafe { VhostUserConfigFlags::from_bits_unchecked(0xffff_ffff) },
+                &buf[0..4],
+            )
+            .unwrap_err();
+        master
+            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &buf)
+            .unwrap_err();
+        master
+            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &[])
+            .unwrap_err();
+    }
+
+    fn create_pair2() -> (Master, Endpoint<MasterReq>) {
+        let path = temp_path();
+        let (master, peer) = create_pair(&path);
+
+        {
+            let mut node = master.node();
+            node.virtio_features = 0xffff_ffff;
+            node.acked_virtio_features = 0xffff_ffff;
+            node.protocol_features = 0xffff_ffff;
+            node.acked_protocol_features = 0xffff_ffff;
+        }
+
+        (master, peer)
     }
 
     #[test]
-    fn test_get_ring_num() {
-        // TODO
+    fn test_master_get_config_negative0() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let mut hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+
+        hdr.set_code(MasterReq::GET_FEATURES);
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_err());
+        hdr.set_code(MasterReq::GET_CONFIG);
+    }
+
+    #[test]
+    fn test_master_get_config_negative1() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let mut hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+
+        hdr.set_reply(false);
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_err());
+    }
+
+    #[test]
+    fn test_master_get_config_negative2() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+    }
+
+    #[test]
+    fn test_master_get_config_negative3() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let mut msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+
+        msg.offset = 0;
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_err());
+    }
+
+    #[test]
+    fn test_master_get_config_negative4() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let mut msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+
+        msg.offset = 0x101;
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_err());
+    }
+
+    #[test]
+    fn test_master_get_config_negative5() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let mut msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+
+        msg.offset = (MAX_MSG_SIZE + 1) as u32;
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_err());
+    }
+
+    #[test]
+    fn test_master_get_config_negative6() {
+        let (mut master, mut peer) = create_pair2();
+        let buf = vec![0x0; MAX_MSG_SIZE + 1];
+
+        let hdr = VhostUserMsgHeader::new(MasterReq::GET_CONFIG, 0x4, 16);
+        let mut msg = VhostUserConfig::new(0x100, 4, VhostUserConfigFlags::empty());
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..4], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_ok());
+
+        msg.size = 6;
+        peer.send_message_with_payload(&hdr, &msg, &buf[0..6], None)
+            .unwrap();
+        assert!(master
+            .get_config(0x100, 4, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .is_err());
+    }
+
+    #[test]
+    fn test_maset_set_mem_table_failure() {
+        let (master, _peer) = create_pair2();
+
+        master.set_mem_table(&[]).unwrap_err();
+        let tables = vec![VhostUserMemoryRegionInfo::default(); MAX_ATTACHED_FD_ENTRIES + 1];
+        master.set_mem_table(&tables).unwrap_err();
     }
 }
