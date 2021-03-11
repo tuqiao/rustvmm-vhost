@@ -647,8 +647,6 @@ mod tests {
     use super::*;
     use tempfile::{Builder, TempDir};
 
-    use std::path::PathBuf;
-
     fn temp_dir() -> TempDir {
         Builder::new().prefix("/tmp/vhost_test").tempdir().unwrap()
     }

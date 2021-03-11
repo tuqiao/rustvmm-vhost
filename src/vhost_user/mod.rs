@@ -181,7 +181,7 @@ mod dummy_slave;
 #[cfg(all(test, feature = "vhost-user-master", feature = "vhost-user-slave"))]
 mod tests {
     use std::os::unix::io::AsRawFd;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
 
@@ -190,10 +190,10 @@ mod tests {
     use super::*;
     use crate::backend::VhostBackend;
     use crate::{VhostUserMemoryRegionInfo, VringConfigData};
-    use tempfile::Builder;
+    use tempfile::{Builder, TempDir};
 
-    fn temp_path() -> PathBuf {
-        Builder::new().prefix("/tmp/vhost_test").path().unwrap()
+    fn temp_dir() -> TempDir {
+        Builder::new().prefix("/tmp/vhost_test").tempdir().unwrap()
     }
 
     fn create_slave<P, S>(path: P, backend: Arc<S>) -> (Master, SlaveReqHandler<S>)
@@ -218,7 +218,9 @@ mod tests {
     #[test]
     fn test_set_owner() {
         let slave_be = Arc::new(Mutex::new(DummySlaveReqHandler::new()));
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let (master, mut slave) = create_slave(&path, slave_be.clone());
 
         assert_eq!(slave_be.lock().unwrap().owned, false);
@@ -234,7 +236,9 @@ mod tests {
     fn test_set_features() {
         let mbar = Arc::new(Barrier::new(2));
         let sbar = mbar.clone();
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let slave_be = Arc::new(Mutex::new(DummySlaveReqHandler::new()));
         let (mut master, mut slave) = create_slave(&path, slave_be.clone());
 
@@ -278,7 +282,9 @@ mod tests {
     fn test_master_slave_process() {
         let mbar = Arc::new(Barrier::new(2));
         let sbar = mbar.clone();
-        let path = temp_path();
+        let dir = temp_dir();
+        let mut path = dir.path().to_owned();
+        path.push("sock");
         let slave_be = Arc::new(Mutex::new(DummySlaveReqHandler::new()));
         let (mut master, mut slave) = create_slave(&path, slave_be.clone());
 
