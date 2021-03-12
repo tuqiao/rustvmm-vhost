@@ -8,6 +8,7 @@ use super::*;
 
 pub const MAX_QUEUE_NUM: usize = 2;
 pub const MAX_VRING_NUM: usize = 256;
+pub const MAX_MEM_SLOTS: usize = 32;
 pub const VIRTIO_FEATURES: u64 = 0x40000003;
 
 #[derive(Default)]
@@ -241,6 +242,18 @@ impl VhostUserSlaveReqHandlerMut for DummySlaveReqHandler {
         {
             return Err(Error::InvalidParam);
         }
+        Ok(())
+    }
+
+    fn get_max_mem_slots(&mut self) -> Result<u64> {
+        Ok(MAX_MEM_SLOTS as u64)
+    }
+
+    fn add_mem_region(&mut self, _region: &VhostUserSingleMemoryRegion, _fd: RawFd) -> Result<()> {
+        Ok(())
+    }
+
+    fn remove_mem_region(&mut self, _region: &VhostUserSingleMemoryRegion) -> Result<()> {
         Ok(())
     }
 }

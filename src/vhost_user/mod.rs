@@ -180,6 +180,7 @@ mod dummy_slave;
 
 #[cfg(all(test, feature = "vhost-user-master", feature = "vhost-user-slave"))]
 mod tests {
+    use std::fs::File;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
     use std::sync::{Arc, Barrier, Mutex};
@@ -190,7 +191,7 @@ mod tests {
     use super::*;
     use crate::backend::VhostBackend;
     use crate::{VhostUserMemoryRegionInfo, VringConfigData};
-    use tempfile::{Builder, TempDir};
+    use tempfile::{tempfile, Builder, TempDir};
 
     fn temp_dir() -> TempDir {
         Builder::new().prefix("/tmp/vhost_test").tempdir().unwrap()
@@ -336,6 +337,15 @@ mod tests {
             slave.handle_request().unwrap();
             slave.handle_request().unwrap();
 
+            // get_max_mem_slots()
+            slave.handle_request().unwrap();
+
+            // add_mem_region()
+            slave.handle_request().unwrap();
+
+            // remove_mem_region()
+            slave.handle_request().unwrap();
+
             sbar.wait();
         });
 
@@ -397,6 +407,21 @@ mod tests {
         master.set_vring_call(0, &eventfd).unwrap();
         master.set_vring_kick(0, &eventfd).unwrap();
         master.set_vring_err(0, &eventfd).unwrap();
+
+        let max_mem_slots = master.get_max_mem_slots().unwrap();
+        assert_eq!(max_mem_slots, 32);
+
+        let region_file = tempfile().unwrap();
+        let region = VhostUserMemoryRegionInfo {
+            guest_phys_addr: 0x10_0000,
+            memory_size: 0x10_0000,
+            userspace_addr: 0,
+            mmap_offset: 0,
+            mmap_handle: region_file.as_raw_fd(),
+        };
+        master.add_mem_region(&region).unwrap();
+
+        master.remove_mem_region(&region).unwrap();
 
         mbar.wait();
     }
