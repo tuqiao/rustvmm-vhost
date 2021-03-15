@@ -84,7 +84,9 @@ mod tests {
     use super::*;
     use crate::{VhostBackend, VhostUserMemoryRegionInfo, VringConfigData};
 
+    // Ignore all tests because /dev/vhost-vsock is unavailable in Chrome OS chroot.
     #[test]
+    #[ignore]
     fn test_vsock_new_device() {
         let m = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10_0000)]).unwrap();
         let vsock = Vsock::new(&m).unwrap();
@@ -95,6 +97,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_vsock_is_valid() {
         let m = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10_0000)]).unwrap();
         let vsock = Vsock::new(&m).unwrap();
@@ -119,6 +122,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_vsock_ioctls() {
         let m = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10_0000)]).unwrap();
         let vsock = Vsock::new(&m).unwrap();
