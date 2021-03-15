@@ -180,7 +180,6 @@ mod dummy_slave;
 
 #[cfg(all(test, feature = "vhost-user-master", feature = "vhost-user-slave"))]
 mod tests {
-    use std::fs::File;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
     use std::sync::{Arc, Barrier, Mutex};
