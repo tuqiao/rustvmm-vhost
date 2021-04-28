@@ -879,10 +879,14 @@ mod tests {
         }
 
         master
-            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .set_config(0, VhostUserConfigFlags::WRITABLE, &buf[0..4])
             .unwrap();
         master
-            .set_config(0x0, VhostUserConfigFlags::WRITABLE, &buf[0..4])
+            .set_config(
+                VHOST_USER_CONFIG_SIZE,
+                VhostUserConfigFlags::WRITABLE,
+                &buf[0..4],
+            )
             .unwrap_err();
         master
             .set_config(0x1000, VhostUserConfigFlags::WRITABLE, &buf[0..4])
@@ -895,10 +899,10 @@ mod tests {
             )
             .unwrap_err();
         master
-            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &buf)
+            .set_config(VHOST_USER_CONFIG_SIZE, VhostUserConfigFlags::WRITABLE, &buf)
             .unwrap_err();
         master
-            .set_config(0x100, VhostUserConfigFlags::WRITABLE, &[])
+            .set_config(VHOST_USER_CONFIG_SIZE, VhostUserConfigFlags::WRITABLE, &[])
             .unwrap_err();
     }
 
