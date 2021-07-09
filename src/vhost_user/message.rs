@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
+#![allow(clippy::upper_case_acronyms)]
 
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -140,9 +141,9 @@ pub enum MasterReq {
     MAX_CMD = 41,
 }
 
-impl Into<u32> for MasterReq {
-    fn into(self) -> u32 {
-        self as u32
+impl From<MasterReq> for u32 {
+    fn from(req: MasterReq) -> u32 {
+        req as u32
     }
 }
 
@@ -180,9 +181,9 @@ pub enum SlaveReq {
     MAX_CMD = 10,
 }
 
-impl Into<u32> for SlaveReq {
-    fn into(self) -> u32 {
-        self as u32
+impl From<SlaveReq> for u32 {
+    fn from(req: SlaveReq) -> u32 {
+        req as u32
     }
 }
 
@@ -673,6 +674,42 @@ impl VhostUserMsgValidator for VhostUserConfig {
 /// Payload for the VhostUserConfig message.
 pub type VhostUserConfigPayload = Vec<u8>;
 
+/// Single memory region descriptor as payload for ADD_MEM_REG and REM_MEM_REG
+/// requests.
+#[repr(C)]
+#[derive(Default, Clone)]
+pub struct VhostUserInflight {
+    /// Size of the area to track inflight I/O.
+    pub mmap_size: u64,
+    /// Offset of this area from the start of the supplied file descriptor.
+    pub mmap_offset: u64,
+    /// Number of virtqueues.
+    pub num_queues: u16,
+    /// Size of virtqueues.
+    pub queue_size: u16,
+}
+
+impl VhostUserInflight {
+    /// Create a new instance.
+    pub fn new(mmap_size: u64, mmap_offset: u64, num_queues: u16, queue_size: u16) -> Self {
+        VhostUserInflight {
+            mmap_size,
+            mmap_offset,
+            num_queues,
+            queue_size,
+        }
+    }
+}
+
+impl VhostUserMsgValidator for VhostUserInflight {
+    fn is_valid(&self) -> bool {
+        if self.num_queues == 0 || self.queue_size == 0 {
+            return false;
+        }
+        true
+    }
+}
+
 /*
  * TODO: support dirty log, live migration and IOTLB operations.
 #[repr(packed)]
@@ -741,6 +778,151 @@ impl VhostUserMsgValidator for VhostUserFSSlaveMsg {
             }
         }
         true
+    }
+}
+
+/// Inflight I/O descriptor state for split virtqueues
+#[repr(packed)]
+#[derive(Clone, Copy)]
+struct DescStateSplit {
+    /// Indicate whether this descriptor (only head) is inflight or not.
+    inflight: u8,
+    /// Padding
+    padding: [u8; 5],
+    /// List of last batch of used descriptors, only when batching is used for submitting
+    next: u16,
+    /// Preserve order of fetching available descriptors, only for head descriptor
+    counter: u64,
+}
+
+impl DescStateSplit {
+    fn new() -> Self {
+        DescStateSplit {
+            inflight: 0,
+            padding: [0; 5],
+            next: 0,
+            counter: 0,
+        }
+    }
+}
+
+/// Inflight I/O queue region for split virtqueues
+#[allow(safe_packed_borrows)]
+#[repr(packed)]
+struct QueueRegionSplit {
+    /// Features flags of this region
+    features: u64,
+    /// Version of this region
+    version: u16,
+    /// Number of DescStateSplit entries
+    desc_num: u16,
+    /// List to track last batch of used descriptors
+    last_batch_head: u16,
+    /// Idx value of used ring
+    used_idx: u16,
+    /// Pointer to an array of DescStateSplit entries
+    desc: u64,
+}
+
+impl QueueRegionSplit {
+    fn new(features: u64, queue_size: u16) -> Self {
+        QueueRegionSplit {
+            features,
+            version: 1,
+            desc_num: queue_size,
+            last_batch_head: 0,
+            used_idx: 0,
+            desc: 0,
+        }
+    }
+}
+
+/// Inflight I/O descriptor state for packed virtqueues
+#[repr(packed)]
+#[derive(Clone, Copy)]
+struct DescStatePacked {
+    /// Indicate whether this descriptor (only head) is inflight or not.
+    inflight: u8,
+    /// Padding
+    padding: u8,
+    /// Link to next free entry
+    next: u16,
+    /// Link to last entry of descriptor list, only for head
+    last: u16,
+    /// Length of descriptor list, only for head
+    num: u16,
+    /// Preserve order of fetching avail descriptors, only for head
+    counter: u64,
+    /// Buffer ID
+    id: u16,
+    /// Descriptor flags
+    flags: u16,
+    /// Buffer length
+    len: u32,
+    /// Buffer address
+    addr: u64,
+}
+
+impl DescStatePacked {
+    fn new() -> Self {
+        DescStatePacked {
+            inflight: 0,
+            padding: 0,
+            next: 0,
+            last: 0,
+            num: 0,
+            counter: 0,
+            id: 0,
+            flags: 0,
+            len: 0,
+            addr: 0,
+        }
+    }
+}
+
+/// Inflight I/O queue region for packed virtqueues
+#[allow(safe_packed_borrows)]
+#[repr(packed)]
+struct QueueRegionPacked {
+    /// Features flags of this region
+    features: u64,
+    /// version of this region
+    version: u16,
+    /// size of descriptor state array
+    desc_num: u16,
+    /// head of free DescStatePacked entry list
+    free_head: u16,
+    /// old head of free DescStatePacked entry list
+    old_free_head: u16,
+    /// used idx of descriptor ring
+    used_idx: u16,
+    /// old used idx of descriptor ring
+    old_used_idx: u16,
+    /// device ring wrap counter
+    used_wrap_counter: u8,
+    /// old device ring wrap counter
+    old_used_wrap_counter: u8,
+    /// Padding
+    padding: [u8; 7],
+    /// Pointer to array tracking state of each descriptor from descriptor ring
+    desc: u64,
+}
+
+impl QueueRegionPacked {
+    fn new(features: u64, queue_size: u16) -> Self {
+        QueueRegionPacked {
+            features,
+            version: 1,
+            desc_num: queue_size,
+            free_head: 0,
+            old_free_head: 0,
+            used_idx: 0,
+            old_used_idx: 0,
+            used_wrap_counter: 0,
+            old_used_wrap_counter: 0,
+            padding: [0; 7],
+            desc: 0,
+        }
     }
 }
 
