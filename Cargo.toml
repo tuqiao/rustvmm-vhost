@@ -30,4 +30,3 @@ vm-memory = { version = "0.2.0", features=["backend-mmap"] }
 
 [patch.crates-io]
 sys_util = { path = "../../../platform/crosvm/sys_util" } # ignored by ebuild
-tempfile = { path = "../../../platform/crosvm/tempfile" } # ignored by ebuild
